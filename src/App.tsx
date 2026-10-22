@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, Users } from 'lucide-react';
+import { io } from 'socket.io-client';
+import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, LockKeyhole, LogOut, Mail, Radio, RefreshCw, Shield, Terminal, Users, X } from 'lucide-react';
 
 type Step = 'date' | 'details' | 'confirmation';
 type BookingDraft = {
@@ -17,7 +18,18 @@ type Reservation = {
   date: string;
   time: string;
   guests: number;
+  notificationSent?: boolean;
+  notificationError?: string;
 };
+type CreatorReservation = Reservation & {
+  id: string;
+  email: string;
+  phone: string;
+  note: string;
+  status: string;
+  createdAt: string;
+};
+type CreatorSettings = { email: string; mailReady: boolean };
 
 function isReservation(value: unknown): value is Reservation {
   if (!value || typeof value !== 'object') return false;
@@ -26,7 +38,39 @@ function isReservation(value: unknown): value is Reservation {
     && typeof candidate.name === 'string'
     && typeof candidate.date === 'string'
     && typeof candidate.time === 'string'
-    && typeof candidate.guests === 'number';
+    && typeof candidate.guests === 'number'
+    && (candidate.notificationSent === undefined || typeof candidate.notificationSent === 'boolean')
+    && (candidate.notificationError === undefined || typeof candidate.notificationError === 'string');
+}
+
+function isCreatorReservation(value: unknown): value is CreatorReservation {
+  if (!isReservation(value) || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.id === 'string'
+    && typeof candidate.email === 'string'
+    && typeof candidate.phone === 'string'
+    && typeof candidate.note === 'string'
+    && typeof candidate.status === 'string'
+    && typeof candidate.createdAt === 'string';
+}
+
+async function creatorRequest<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...options.headers,
+    },
+  });
+  const data: unknown = response.status === 204 ? null : await response.json();
+  if (!response.ok) {
+    const message = data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
+      ? data.error
+      : 'Impossible de communiquer avec le serveur.';
+    throw new Error(message);
+  }
+  return data as T;
 }
 
 const paths: Record<Step, string> = {
@@ -131,21 +175,31 @@ async function createReservation(draft: BookingDraft): Promise<Reservation> {
     date: result.date,
     time: result.time,
     guests: result.guests,
+    notificationSent: result.notificationSent,
+    notificationError: result.notificationError,
   };
 }
 
 export default function App() {
   const [step, setStep] = useState<Step>(currentStep);
+  const [creatorsRoute, setCreatorsRoute] = useState(() => window.location.hash.startsWith('#/createurs'));
   const [draft, setDraft] = useState<BookingDraft>(readDraft);
   const [confirmation, setConfirmation] = useState<Reservation | null>(readReservation);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showCreatorLogin, setShowCreatorLogin] = useState(false);
+  const [creatorPin, setCreatorPin] = useState('');
+  const [creatorLoginError, setCreatorLoginError] = useState('');
+  const [creatorLoginPending, setCreatorLoginPending] = useState(false);
 
   useEffect(() => {
     if (!window.location.hash) window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${paths.date}`);
-    const syncStep = () => setStep(currentStep());
-    window.addEventListener('hashchange', syncStep);
-    return () => window.removeEventListener('hashchange', syncStep);
+    const syncRoute = () => {
+      setCreatorsRoute(window.location.hash.startsWith('#/createurs'));
+      setStep(currentStep());
+    };
+    window.addEventListener('hashchange', syncRoute);
+    return () => window.removeEventListener('hashchange', syncRoute);
   }, []);
 
   useEffect(() => {
@@ -195,6 +249,37 @@ export default function App() {
     navigate('date');
   };
 
+  const loginCreator = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCreatorLoginError('');
+    setCreatorLoginPending(true);
+    try {
+      const response = await fetch('/api/creators/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: creatorPin }),
+      });
+      const result: unknown = await response.json();
+      if (!response.ok || !result || typeof result !== 'object' || !('token' in result) || typeof result.token !== 'string') {
+        const message = result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
+          ? result.error
+          : 'Connexion impossible.';
+        throw new Error(message);
+      }
+      sessionStorage.setItem('zinc-creators-token', result.token);
+      setShowCreatorLogin(false);
+      setCreatorPin('');
+      window.location.hash = '#/createurs';
+      setCreatorsRoute(true);
+    } catch (loginError) {
+      setCreatorLoginError(loginError instanceof Error ? loginError.message : 'Connexion impossible.');
+    } finally {
+      setCreatorLoginPending(false);
+    }
+  };
+
+  if (creatorsRoute) return <CreatorPortal />;
+
   const hasBookingDetails = Boolean(draft.date && draft.time && draft.guests);
   const safeStep = step === 'confirmation' && !confirmation ? 'date' : step;
   const stepIndex = safeStep === 'date' ? 1 : safeStep === 'details' ? 2 : 3;
@@ -202,9 +287,12 @@ export default function App() {
   return (
     <main className="booking-app">
       <header className="app-header">
-        <a className="brand" href="#/reservation" aria-label="Le Zinc Bouillon — réservation">
-          <img className="brand-logo" src="/logo-zinc.svg" alt="Le Zinc Bouillon" />
-        </a>
+        <div className="brand-lockup">
+          <a className="brand" href="#/reservation" aria-label="Le Zinc Bouillon — réservation">
+            <img className="brand-logo" src="/logo-zinc.svg" alt="Le Zinc Bouillon" />
+          </a>
+          <button className="secret-logo-trigger" type="button" aria-label="Accès créateurs" title="Accès créateurs" onClick={() => { setCreatorLoginError(''); setShowCreatorLogin(true); }} />
+        </div>
         <span className="header-caption">RÉSERVATION EN LIGNE</span>
       </header>
 
@@ -313,6 +401,9 @@ export default function App() {
                 <strong>{confirmation.reference}</strong>
                 <p>{formatDate(confirmation.date)}<br />{confirmation.time} · {confirmation.guests} {confirmation.guests === 1 ? 'personne' : 'personnes'}</p>
               </div>
+              {confirmation.notificationSent === false && confirmation.notificationError && (
+                <p className="notification-warning" role="status">Votre réservation est enregistrée, mais l’alerte e-mail n’a pas pu être envoyée. Le restaurant pourra consulter la demande dans son espace créateurs.</p>
+              )}
               <button className="secondary-button" type="button" onClick={newBooking}>Faire une nouvelle réservation <ArrowRight size={16} /></button>
             </section>
           )}
@@ -337,6 +428,203 @@ export default function App() {
         <span>LE ZINC BOUILLON</span>
         <span>Réservation simple, sans empreinte bancaire.</span>
       </footer>
+      {showCreatorLogin && (
+        <div className="creator-login-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowCreatorLogin(false); }}>
+          <form className="creator-login-modal" onSubmit={loginCreator}>
+            <button className="creator-login-close" type="button" aria-label="Fermer" onClick={() => setShowCreatorLogin(false)}><X size={17} /></button>
+            <div className="creator-login-icon"><LockKeyhole size={21} /></div>
+            <span className="creator-kicker">ZONE PRIVÉE</span>
+            <h2>Accès créateurs</h2>
+            <label htmlFor="creator-pin">Code PIN à 4 chiffres</label>
+            <input id="creator-pin" autoFocus inputMode="numeric" type="password" pattern="[0-9]{4}" maxLength={4} required value={creatorPin} onChange={(event) => setCreatorPin(event.target.value.replace(/\D/g, '').slice(0, 4))} />
+            {creatorLoginError && <p className="creator-login-error" role="alert">{creatorLoginError}</p>}
+            <button className="creator-login-submit" type="submit" disabled={creatorLoginPending}>{creatorLoginPending ? 'Vérification…' : 'Entrer'} <ArrowRight size={16} /></button>
+          </form>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function CreatorPortal() {
+  const [token, setToken] = useState(() => sessionStorage.getItem('zinc-creators-token') || '');
+  const [pin, setPin] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [reservations, setReservations] = useState<CreatorReservation[]>([]);
+  const [email, setEmail] = useState('');
+  const [mailReady, setMailReady] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const signOut = () => {
+    sessionStorage.removeItem('zinc-creators-token');
+    setToken('');
+    setReservations([]);
+    setEmail('');
+  };
+
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    setLoading(true);
+    Promise.all([
+      creatorRequest<unknown>('/api/creators/reservations', token),
+      creatorRequest<unknown>('/api/creators/settings', token),
+    ]).then(([reservationData, settingsData]) => {
+      if (!active) return;
+      if (!Array.isArray(reservationData) || !reservationData.every(isCreatorReservation)) {
+        throw new Error('La liste des réservations reçue du serveur est invalide.');
+      }
+      if (!settingsData || typeof settingsData !== 'object' || !('email' in settingsData) || typeof settingsData.email !== 'string' || !('mailReady' in settingsData) || typeof settingsData.mailReady !== 'boolean') {
+        throw new Error('Les paramètres e-mail reçus du serveur sont invalides.');
+      }
+      setReservations(reservationData);
+      setEmail(settingsData.email);
+      setMailReady(settingsData.mailReady);
+      setError('');
+    }).catch((loadError) => {
+      if (!active) return;
+      const text = loadError instanceof Error ? loadError.message : 'Chargement impossible.';
+      if (text.includes('Session créateur expirée')) signOut();
+      else setError(text);
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const socket = io();
+    socket.on('reservation:new', (reservation: unknown) => {
+      if (isCreatorReservation(reservation)) {
+        setReservations((current) => [reservation, ...current.filter((item) => item.id !== reservation.id)]);
+      }
+    });
+    socket.on('reservation:updated', (reservation: unknown) => {
+      if (isCreatorReservation(reservation)) {
+        setReservations((current) => current.map((item) => item.id === reservation.id ? reservation : item));
+      }
+    });
+    return () => { socket.disconnect(); };
+  }, [token]);
+
+  const login = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLoginError('');
+    setBusy(true);
+    try {
+      const response = await fetch('/api/creators/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin }),
+      });
+      const result: unknown = await response.json();
+      if (!response.ok || !result || typeof result !== 'object' || !('token' in result) || typeof result.token !== 'string') {
+        const errorMessage = result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
+          ? result.error
+          : 'Connexion impossible.';
+        throw new Error(errorMessage);
+      }
+      sessionStorage.setItem('zinc-creators-token', result.token);
+      setToken(result.token);
+      setPin('');
+    } catch (loginFailure) {
+      setLoginError(loginFailure instanceof Error ? loginFailure.message : 'Connexion impossible.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveEmail = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    setBusy(true);
+    try {
+      const settings = await creatorRequest<CreatorSettings>('/api/creators/settings', token, {
+        method: 'PUT',
+        body: JSON.stringify({ email }),
+      });
+      setEmail(settings.email);
+      setMailReady(settings.mailReady);
+      setMessage('Adresse e-mail enregistrée.');
+    } catch (saveFailure) {
+      setError(saveFailure instanceof Error ? saveFailure.message : 'Enregistrement impossible.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refresh = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const data = await creatorRequest<unknown>('/api/creators/reservations', token);
+      if (!Array.isArray(data) || !data.every(isCreatorReservation)) throw new Error('La liste reçue du serveur est invalide.');
+      setReservations(data);
+    } catch (refreshFailure) {
+      setError(refreshFailure instanceof Error ? refreshFailure.message : 'Actualisation impossible.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!token) {
+    return (
+      <main className="creator-portal creator-auth">
+        <form className="creator-auth-card" onSubmit={login}>
+          <div className="creator-auth-mark"><Shield size={25} /></div>
+          <div className="creator-kicker"><Terminal size={14} /> ACCÈS RESTREINT</div>
+          <h1>Créateurs<span>_</span></h1>
+          <p>Zone de contrôle privée. Saisissez votre code d’accès pour continuer.</p>
+          <label htmlFor="creator-page-pin">PIN <span>// 4 DIGITS</span></label>
+          <input id="creator-page-pin" autoFocus inputMode="numeric" type="password" pattern="[0-9]{4}" maxLength={4} required value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 4))} />
+          {loginError && <p className="creator-error" role="alert">{loginError}</p>}
+          <button className="creator-button" type="submit" disabled={busy}>{busy ? 'VÉRIFICATION…' : 'AUTHENTIFIER'} <ArrowRight size={16} /></button>
+          <a className="creator-back" href="#/reservation"><ArrowLeft size={14} /> RETOUR À LA RÉSERVATION</a>
+        </form>
+      </main>
+    );
+  }
+
+  return (
+    <main className="creator-portal">
+      <header className="creator-header">
+        <div className="creator-title-lockup"><span className="creator-logo">Z<span>.</span></span><div><div className="creator-kicker"><Radio size={13} /> SYSTÈME EN LIGNE</div><h1>CREATORS<span>_</span></h1></div></div>
+        <div className="creator-header-actions"><a href="#/reservation"><ArrowLeft size={15} /> RÉSERVATION</a><button type="button" onClick={signOut}><LogOut size={15} /> QUITTER</button></div>
+      </header>
+      <div className="creator-content">
+        <div className="creator-welcome"><div><span className="creator-kicker">TABLEAU DE BORD // LE ZINC BOUILLON</span><h2>Réservations<span>_</span></h2></div><button className="creator-refresh" type="button" onClick={() => void refresh()} disabled={loading}><RefreshCw size={15} /> {loading ? 'CHARGEMENT' : 'ACTUALISER'}</button></div>
+
+        <section className="creator-panel creator-email-panel">
+          <div className="creator-panel-heading"><Mail size={17} /><h3>ALERTE E-MAIL</h3><span className={mailReady ? 'system-status ready' : 'system-status'}>{mailReady ? 'SERVICE ACTIF' : 'CONFIGURATION REQUISE'}</span></div>
+          <form className="creator-email-form" onSubmit={saveEmail}>
+            <label htmlFor="creator-email">ADRESSE DE NOTIFICATION</label>
+            <div className="creator-email-controls"><input id="creator-email" type="email" required maxLength={254} placeholder="vous@exemple.fr" value={email} onChange={(event) => setEmail(event.target.value)} /><button type="submit" disabled={busy}>{busy ? 'ENREGISTREMENT…' : 'ENREGISTRER'}</button></div>
+          </form>
+          <p className="creator-hint">{mailReady ? 'Un e-mail sera envoyé à cette adresse à chaque nouvelle réservation.' : email ? 'Configurez RESEND_API_KEY et RESEND_FROM_EMAIL sur le serveur pour activer les notifications. Les réservations restent enregistrées même si l’envoi échoue.' : 'Saisissez et enregistrez une adresse e-mail pour recevoir les alertes de réservation.'}</p>
+          {message && <p className="creator-success" role="status">{message}</p>}
+        </section>
+
+        <section className="creator-panel creator-reservations-panel">
+          <div className="creator-panel-heading"><Users size={17} /><h3>CARNET DE RÉSERVATIONS</h3><span className="reservation-count">{reservations.length} ENREGISTRÉE{reservations.length === 1 ? '' : 'S'}</span></div>
+          {error && <p className="creator-error creator-panel-error" role="alert">{error}</p>}
+          {loading && reservations.length === 0 ? <p className="creator-empty">LECTURE DES DONNÉES…</p> : reservations.length === 0 ? <p className="creator-empty">AUCUNE RÉSERVATION POUR LE MOMENT.</p> : (
+            <div className="creator-reservation-list">
+              {reservations.map((reservation) => (
+                <article className="creator-reservation" key={reservation.id}>
+                  <div className="reservation-scan"><span>{reservation.reference}</span><strong>{reservation.guests.toString().padStart(2, '0')}</strong><small>CONVIVES</small></div>
+                  <div className="creator-reservation-info"><div className="creator-reservation-top"><h4>{reservation.name}</h4><span className={`creator-status ${reservation.status === 'Annulée' ? 'cancelled' : ''}`}>{reservation.status.toUpperCase()}</span></div><p className="creator-reservation-date">{formatDate(reservation.date)} · {reservation.time}</p><p className="creator-contact"><a href={`mailto:${encodeURIComponent(reservation.email)}`}>{reservation.email}</a><span>·</span><a href={`tel:${reservation.phone.replace(/[^\d+]/g, '')}`}>{reservation.phone}</a></p>{reservation.note && <p className="creator-reservation-note">NOTE // {reservation.note}</p>}</div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+        <footer className="creator-footer"><span>LE ZINC BOUILLON // PRIVATE ACCESS</span><span>FLUX TEMPS RÉEL <i /></span></footer>
+      </div>
     </main>
   );
 }

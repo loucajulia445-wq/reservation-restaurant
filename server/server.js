@@ -34,7 +34,46 @@ if (!existsSync(dataPath)) {
 }
 let db = JSON.parse(readFileSync(dataPath, 'utf8'));
 if (!Array.isArray(db.reservations) || !Array.isArray(db.events)) db = { reservations: [], events: seedEvents() };
+if (typeof db.creatorEmail !== 'string') db.creatorEmail = '';
 function persist() { writeFileSync(dataPath, JSON.stringify(db, null, 2)); }
+const creatorSessions = new Set();
+const emailPattern = /^\S+@\S+\.\S+$/;
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]);
+}
+
+async function sendReservationEmail(reservation) {
+  if (!db.creatorEmail) return { sent: false, error: 'Aucune adresse e-mail créateur n’est configurée.' };
+  if (!process.env.RESEND_API_KEY || !process.env.RESEND_FROM_EMAIL) {
+    return { sent: false, error: 'Le service e-mail n’est pas configuré sur le serveur (RESEND_API_KEY et RESEND_FROM_EMAIL).' };
+  }
+  const dateLabel = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'full', timeZone: 'Europe/Paris' })
+    .format(new Date(`${reservation.date}T12:00:00`));
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: process.env.RESEND_FROM_EMAIL,
+      to: [db.creatorEmail],
+      subject: `Nouvelle réservation ${reservation.reference} · Le Zinc Bouillon`,
+      html: `<h1>Nouvelle réservation</h1><p><strong>${escapeHtml(reservation.name)}</strong> a demandé une table.</p><ul><li>Date : ${escapeHtml(dateLabel)}</li><li>Heure : ${escapeHtml(reservation.time)}</li><li>Personnes : ${reservation.guests}</li><li>Téléphone : ${escapeHtml(reservation.phone)}</li><li>E-mail : ${escapeHtml(reservation.email)}</li></ul><p>Référence : ${escapeHtml(reservation.reference)}</p>${reservation.note ? `<p>Note : ${escapeHtml(reservation.note)}</p>` : ''}`,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    const responseText = await response.text();
+    const message = `Le fournisseur e-mail a refusé l’envoi (HTTP ${response.status}).`;
+    console.error(`${message} ${responseText.slice(0, 500)}`);
+    return { sent: false, error: message };
+  }
+  return { sent: true, error: '' };
+}
 
 app.use(express.json({ limit: '32kb' }));
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -45,6 +84,40 @@ app.post('/api/admin/login', (req, res) => {
   const token = randomUUID();
   sessions.add(token);
   res.json({ token });
+});
+app.post('/api/creators/login', (req, res) => {
+  const expected = process.env.CREATOR_PIN || '1304';
+  if (!/^\d{4}$/.test(String(req.body?.pin || '')) || String(req.body.pin) !== expected) {
+    return res.status(401).json({ error: 'Code PIN incorrect.' });
+  }
+  const token = randomUUID();
+  creatorSessions.add(token);
+  res.json({ token });
+});
+function requireCreator(req, res, next) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!token || !creatorSessions.has(token)) return res.status(401).json({ error: 'Session créateur expirée. Reconnectez-vous.' });
+  next();
+}
+app.get('/api/creators/reservations', requireCreator, (_req, res) => {
+  const sorted = [...db.reservations].sort((a, b) => `${b.date}${b.time}`.localeCompare(`${a.date}${a.time}`));
+  res.json(sorted);
+});
+app.get('/api/creators/settings', requireCreator, (_req, res) => {
+  res.json({
+    email: db.creatorEmail,
+    mailReady: Boolean(db.creatorEmail && process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL),
+  });
+});
+app.put('/api/creators/settings', requireCreator, (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!emailPattern.test(email) || email.length > 254) return res.status(400).json({ error: 'Saisissez une adresse e-mail valide.' });
+  db.creatorEmail = email;
+  persist();
+  res.json({
+    email: db.creatorEmail,
+    mailReady: Boolean(db.creatorEmail && process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL),
+  });
 });
 function requireAdmin(req, res, next) {
   const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
@@ -75,7 +148,19 @@ app.post('/api/reservations', (req, res) => {
   persist();
   io.emit('reservation:new', reservation);
   if (event) io.emit('events:updated');
-  res.status(201).json(reservation);
+  sendReservationEmail(reservation)
+    .then((notification) => {
+      if (!notification.sent && db.creatorEmail) console.error(`Notification e-mail non envoyée pour ${reservation.reference} : ${notification.error}`);
+      res.status(201).json({ ...reservation, notificationSent: notification.sent, notificationError: notification.error });
+    })
+    .catch((error) => {
+      console.error(`Erreur d’envoi de notification pour ${reservation.reference}:`, error);
+      res.status(201).json({
+        ...reservation,
+        notificationSent: false,
+        notificationError: 'Erreur de communication avec le service e-mail. Consultez les journaux du serveur.',
+      });
+    });
 });
 app.patch('/api/admin/reservations/:id', requireAdmin, (req, res) => {
   const reservation = db.reservations.find((item) => item.id === req.params.id);
