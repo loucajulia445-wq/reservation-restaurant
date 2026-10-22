@@ -6,10 +6,10 @@
   "scripts": {
     "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:server\"",
     "dev:web": "vite --host 0.0.0.0",
-    "dev:server": "node --watch server/server.js",
+    "dev:server": "node --env-file-if-exists=.env --watch server/server.js",
     "build": "tsc -b && vite build",
     "test:api": "node scripts/smoke-test.js",
-    "start": "node server/server.js",
+    "start": "node --env-file-if-exists=.env server/server.js",
     "preview": "vite preview"
   },
   "dependencies": {
