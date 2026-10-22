@@ -2,6 +2,8 @@
 
 Application dédiée aux réservations de tables, conçue pour être intégrée au site du restaurant. Le parcours client comporte trois étapes : choix de la date, de l’heure et du nombre de personnes ; saisie des coordonnées ; confirmation avec une référence de réservation.
 
+L’identité visuelle s’inspire du [site du Zinc Bouillon Toulon](https://lezinc-toulon.com/) : fond sombre, logo blanc et accents rouges. Le logo est intégré localement dans `public/logo-zinc.svg`.
+
 ## Démarrer en local
 
 1. Installez Node.js 20 ou plus récent.

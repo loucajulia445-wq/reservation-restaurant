@@ -203,8 +203,7 @@ export default function App() {
     <main className="booking-app">
       <header className="app-header">
         <a className="brand" href="#/reservation" aria-label="Le Zinc Bouillon — réservation">
-          <span className="brand-mark">Z<span>.</span></span>
-          <span className="brand-name">LE ZINC<br /><small>BOUILLON</small></span>
+          <img className="brand-logo" src="/logo-zinc.svg" alt="Le Zinc Bouillon" />
         </a>
         <span className="header-caption">RÉSERVATION EN LIGNE</span>
       </header>
