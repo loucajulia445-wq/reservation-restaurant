@@ -1,132 +1,343 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { io } from 'socket.io-client';
-import { ArrowDown, ArrowLeft, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, Clock3, MapPin, Menu, Music2, PartyPopper, Phone, Plus, Search, Settings2, Sparkles, Ticket, Trash2, Users, X } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, Users } from 'lucide-react';
 
-type EventItem = { id: string; title: string; description: string; date: string; time: string; category: string; capacity: number; booked: number };
-type Reservation = { id: string; reference: string; name: string; email: string; phone: string; date: string; time: string; guests: number; note: string; eventId?: string | null; status: string; createdAt: string };
-type BookingDraft = { name: string; email: string; phone: string; date: string; time: string; guests: string; note: string };
-const api = async <T,>(path: string, options: RequestInit = {}, token?: string): Promise<T> => {
-  const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
-  const data = response.status === 204 ? null : await response.json();
-  if (!response.ok) throw new Error(data?.error || 'Une erreur est survenue.');
-  return data as T;
+type Step = 'date' | 'details' | 'confirmation';
+type BookingDraft = {
+  date: string;
+  time: string;
+  guests: string;
+  name: string;
+  email: string;
+  phone: string;
+  note: string;
 };
-const prettyDate = (value: string, options: Intl.DateTimeFormatOptions = { weekday: 'long', day: 'numeric', month: 'long' }) => new Intl.DateTimeFormat('fr-FR', options).format(new Date(`${value}T12:00:00`));
-const today = () => new Date().toISOString().slice(0, 10);
-const eventIcons = [Music2, Sparkles, PartyPopper];
+type Reservation = {
+  reference: string;
+  name: string;
+  date: string;
+  time: string;
+  guests: number;
+};
 
-function Brand({ light = false }: { light?: boolean }) {
-  return <a className={`brand ${light ? 'brand-light' : ''}`} href="/" aria-label="Le Zinc Bouillon, accueil"><span className="brand-mark">Z<span>.</span></span><span className="brand-name">LE ZINC<br /><small>BOUILLON</small></span></a>;
+function isReservation(value: unknown): value is Reservation {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.reference === 'string'
+    && typeof candidate.name === 'string'
+    && typeof candidate.date === 'string'
+    && typeof candidate.time === 'string'
+    && typeof candidate.guests === 'number';
 }
-function Toast({ message, onClose }: { message: string; onClose: () => void }) {
-  useEffect(() => { const id = window.setTimeout(onClose, 4400); return () => window.clearTimeout(id); }, [message, onClose]);
-  return <div className="toast"><CheckCircle2 size={19} />{message}<button onClick={onClose} aria-label="Fermer"><X size={16} /></button></div>;
+
+const paths: Record<Step, string> = {
+  date: '#/reservation',
+  details: '#/reservation/coordonnees',
+  confirmation: '#/reservation/confirmation',
+};
+const timeSlots = ['12:00', '12:30', '13:00', '13:30', '19:00', '19:30', '20:00', '20:30', '21:00'];
+const initialDraft: BookingDraft = {
+  date: '',
+  time: '19:00',
+  guests: '2',
+  name: '',
+  email: '',
+  phone: '',
+  note: '',
+};
+
+function currentStep(): Step {
+  if (window.location.hash.endsWith('/confirmation')) return 'confirmation';
+  if (window.location.hash.endsWith('/coordonnees')) return 'details';
+  return 'date';
+}
+
+function localToday() {
+  const date = new Date();
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
+function readDraft(): BookingDraft {
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem('zinc-booking-draft') || 'null');
+    if (
+      saved && typeof saved === 'object' &&
+      'date' in saved && typeof saved.date === 'string' &&
+      'time' in saved && typeof saved.time === 'string' &&
+      'guests' in saved && typeof saved.guests === 'string' &&
+      'name' in saved && typeof saved.name === 'string' &&
+      'email' in saved && typeof saved.email === 'string' &&
+      'phone' in saved && typeof saved.phone === 'string' &&
+      'note' in saved && typeof saved.note === 'string'
+    ) {
+      return {
+        date: saved.date,
+        time: saved.time,
+        guests: saved.guests,
+        name: saved.name,
+        email: saved.email,
+        phone: saved.phone,
+        note: saved.note,
+      };
+    }
+  } catch {
+    sessionStorage.removeItem('zinc-booking-draft');
+  }
+  return initialDraft;
+}
+
+function readReservation(): Reservation | null {
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem('zinc-booking-confirmation') || 'null');
+    if (isReservation(saved)) return saved;
+  } catch {
+    sessionStorage.removeItem('zinc-booking-confirmation');
+  }
+  return null;
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date(`${value}T12:00:00`));
+}
+
+async function createReservation(draft: BookingDraft): Promise<Reservation> {
+  const response = await fetch('/api/reservations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...draft,
+      guests: Number(draft.guests),
+      eventId: null,
+    }),
+  });
+  const result: unknown = await response.json();
+  if (!response.ok) {
+    const message = result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
+      ? result.error
+      : 'Impossible d’enregistrer votre réservation.';
+    throw new Error(message);
+  }
+  if (!isReservation(result)) {
+    throw new Error('La réponse du serveur est invalide. Veuillez réessayer.');
+  }
+  return {
+    reference: result.reference,
+    name: result.name,
+    date: result.date,
+    time: result.time,
+    guests: result.guests,
+  };
 }
 
 export default function App() {
-  const isAdmin = window.location.pathname.startsWith('/admin');
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [toast, setToast] = useState('');
-  const [selectedEvent, setSelectedEvent] = useState('');
-  const [confirmation, setConfirmation] = useState<Reservation | null>(null);
-  const [booking, setBooking] = useState<BookingDraft>({ name: '', email: '', phone: '', date: '', time: '19:00', guests: '2', note: '' });
+  const [step, setStep] = useState<Step>(currentStep);
+  const [draft, setDraft] = useState<BookingDraft>(readDraft);
+  const [confirmation, setConfirmation] = useState<Reservation | null>(readReservation);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const loadEvents = useCallback(async () => {
-    try { setEvents(await api<EventItem[]>('/api/events')); } catch { /* Le serveur peut être encore en démarrage. */ }
+  useEffect(() => {
+    if (!window.location.hash) window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${paths.date}`);
+    const syncStep = () => setStep(currentStep());
+    window.addEventListener('hashchange', syncStep);
+    return () => window.removeEventListener('hashchange', syncStep);
   }, []);
-  useEffect(() => { void loadEvents(); }, [loadEvents]);
+
+  useEffect(() => {
+    sessionStorage.setItem('zinc-booking-draft', JSON.stringify(draft));
+  }, [draft]);
+
+  const navigate = (nextStep: Step) => {
+    setError('');
+    window.location.hash = paths[nextStep];
+    setStep(nextStep);
+  };
+
+  const updateDraft = (updates: Partial<BookingDraft>) => {
+    setDraft((current) => ({ ...current, ...updates }));
+  };
+
+  const continueToDetails = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    navigate('details');
+  };
 
   const submitBooking = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!draft.date || !draft.time || !draft.guests) {
+      setError('Choisissez d’abord une date, une heure et le nombre de personnes.');
+      navigate('date');
+      return;
+    }
+    setError('');
+    setSubmitting(true);
     try {
-      const created = await api<Reservation>('/api/reservations', { method: 'POST', body: JSON.stringify({ ...booking, guests: Number(booking.guests), eventId: selectedEvent || null }) });
+      const created = await createReservation(draft);
       setConfirmation(created);
-      setBooking({ name: '', email: '', phone: '', date: '', time: '19:00', guests: '2', note: '' });
-      setSelectedEvent('');
-      void loadEvents();
-      document.getElementById('reservation')?.scrollIntoView({ behavior: 'smooth' });
-    } catch (error) { setToast(error instanceof Error ? error.message : 'Impossible de créer cette réservation.'); }
+      sessionStorage.setItem('zinc-booking-confirmation', JSON.stringify(created));
+      navigate('confirmation');
+    } catch (submissionError) {
+      setError(submissionError instanceof Error ? submissionError.message : 'Impossible d’enregistrer votre réservation.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  if (isAdmin) return <Admin events={events} refreshEvents={loadEvents} toast={setToast} toastMessage={toast} />;
-  return <>
-    <div className="announcement"><span>UNE MAISON DE BONS VIVANTS DEPUIS TOUJOURS</span><a href="#evenements">Les soirées du Zinc <ArrowRight size={13} /></a></div>
-    <header className="site-header"><Brand /><nav className="public-nav"><a href="#maison">La maison</a><a href="#evenements">Nos événements</a><a href="#infos">Nous trouver</a></nav><div className="header-actions"><a href="tel:+33142720000" className="header-phone"><Phone size={15} /> 01 42 72 00 00</a><a className="button button-dark button-small" href="#reservation">Réserver une table</a></div><a className="mobile-book" href="#reservation" aria-label="Réserver"><CalendarDays size={20} /></a></header>
+  const newBooking = () => {
+    setDraft(initialDraft);
+    setConfirmation(null);
+    sessionStorage.removeItem('zinc-booking-confirmation');
+    navigate('date');
+  };
 
-    <main>
-      <section className="hero" id="maison"><div className="hero-copy"><div className="eyebrow"><span className="eyebrow-line" />PARIS, DEPUIS 1896</div><h1>Le goût des<br /><em>bons moments.</em></h1><p>Un zinc, des nappes blanches, les plats qu’on aime et toujours une place pour les copains. Bienvenue chez vous.</p><div className="hero-buttons"><a href="#reservation" className="button button-dark">Je réserve ma table <ArrowRight size={16} /></a><a href="#maison" className="text-link">Découvrir la maison <ArrowDown size={15} /></a></div><div className="hero-note"><div className="avatar-stack"><i>J</i><i>M</i><i>A</i><b>+</b></div><span><strong>4,8/5</strong> · Le rendez-vous des habitués</span></div></div><div className="hero-visual"><div className="hero-photo"><div className="photo-stamp"><span>FAIT AVEC<br />LE CŒUR</span><span className="stamp-star">✳</span></div><div className="photo-caption"><span>À TABLE !</span><span>PARIS, 11ÈME</span></div></div><div className="photo-index"><span>01</span><span className="index-rule"/><span>LA MAISON</span></div></div><div className="vertical-note">CUISINE DE BON SENS&nbsp; · &nbsp;AMBIANCE DE TOUJOURS</div></section>
+  const hasBookingDetails = Boolean(draft.date && draft.time && draft.guests);
+  const safeStep = step === 'confirmation' && !confirmation ? 'date' : step;
+  const stepIndex = safeStep === 'date' ? 1 : safeStep === 'details' ? 2 : 3;
 
-      <section className="ticker" aria-label="Nos engagements"><div><span>✳</span> DES PLATS FAITS MAISON <i>·</i> DU BON, DU SIMPLE <i>·</i> DES PRIX TOUT DOUX <i>·</i> DES PLATS FAITS MAISON <i>·</i> DU BON, DU SIMPLE <i>·</i> DES PRIX TOUT DOUX <i>·</i></div></section>
+  return (
+    <main className="booking-app">
+      <header className="app-header">
+        <a className="brand" href="#/reservation" aria-label="Le Zinc Bouillon — réservation">
+          <span className="brand-mark">Z<span>.</span></span>
+          <span className="brand-name">LE ZINC<br /><small>BOUILLON</small></span>
+        </a>
+        <span className="header-caption">RÉSERVATION EN LIGNE</span>
+      </header>
 
-      <section className="events-section section-wrap" id="evenements"><div className="section-top"><div><div className="eyebrow"><span className="eyebrow-line" />LA VIE DU ZINC</div><h2>Il se passe<br />toujours <em>quelque chose.</em></h2></div><p>Des soirées qui s’improvisent, des rendez-vous qu’on attend. Il ne manque plus que vous.</p></div>
-        {events.length ? <div className="event-grid">{events.slice(0, 3).map((item, index) => { const Icon = eventIcons[index % eventIcons.length]; return <article className={`event-card event-card-${index + 1}`} key={item.id}><div className="event-art"><span className="event-number">0{index + 1} / À VENIR</span><span className="event-icon"><Icon size={31} strokeWidth={1.4} /></span><span className="art-decoration">✳</span><div className="event-date"><strong>{new Date(`${item.date}T12:00:00`).getDate()}</strong><span>{new Intl.DateTimeFormat('fr-FR', { month: 'short' }).format(new Date(`${item.date}T12:00:00`)).replace('.', '').toUpperCase()}</span></div></div><div className="event-info"><div className="event-meta"><span>{item.category}</span><span><Clock3 size={13} /> {item.time}</span></div><h3>{item.title}</h3><p>{item.description}</p><button className="event-link" onClick={() => { setSelectedEvent(item.id); setBooking((old) => ({ ...old, date: item.date, time: item.time })); document.getElementById('reservation')?.scrollIntoView({ behavior: 'smooth' }); }}>Réserver pour la soirée <ArrowRight size={15} /></button></div></article>; })}</div> : <div className="empty-events">Les prochains rendez-vous arrivent bientôt. Gardez l’œil ouvert !</div>}
-      </section>
+      <div className="booking-layout">
+        <section className="booking-main" aria-live="polite">
+          {safeStep !== 'confirmation' && (
+            <div className="progress" aria-label={`Étape ${stepIndex} sur 3`}>
+              <span className={stepIndex >= 1 ? 'progress-step active' : 'progress-step'}><i>1</i> Votre créneau</span>
+              <span className="progress-line" />
+              <span className={stepIndex >= 2 ? 'progress-step active' : 'progress-step'}><i>2</i> Vos coordonnées</span>
+              <span className="progress-line" />
+              <span className="progress-step"><i>3</i> Confirmation</span>
+            </div>
+          )}
 
-      <section className="booking-section" id="reservation"><div className="booking-side"><div className="eyebrow eyebrow-light"><span className="eyebrow-line" />ON VOUS GARDE UNE PLACE</div><h2>À table,<br /><em>ça vous dit ?</em></h2><p>Deux clics et c’est réservé. On s’occupe du reste, vous n’avez plus qu’à venir avec votre appétit.</p><div className="booking-detail"><span className="detail-icon"><Clock3 size={17} /></span><span><strong>Du mardi au dimanche</strong><br />12h–14h30 · 19h–22h30</span></div><div className="booking-detail"><span className="detail-icon"><MapPin size={17} /></span><span><strong>12 rue des Archives</strong><br />75004 Paris · Métro Hôtel de Ville</span></div><div className="side-flower">✳</div></div><div className="booking-form-wrap">{confirmation ? <div className="confirmation"><div className="confirmation-icon"><Check size={30} /></div><div className="eyebrow"><span className="eyebrow-line" />C’EST DANS LE CARNET</div><h3>À très vite<br /><em>{confirmation.name.split(' ')[0]} !</em></h3><p>Votre demande est bien reçue. Nous vous confirmerons votre table par téléphone ou par e-mail.</p><div className="confirmation-ticket"><span>VOTRE RÉFÉRENCE</span><strong>{confirmation.reference}</strong><small>{prettyDate(confirmation.date)} · {confirmation.time} · {confirmation.guests} couverts</small></div><button className="text-link" onClick={() => setConfirmation(null)}>Faire une autre réservation <ArrowRight size={15} /></button></div> : <form className="booking-form" onSubmit={submitBooking}><div className="form-heading"><span>VOTRE TABLE VOUS ATTEND</span><span className="required-note">* obligatoire</span></div>
-          {selectedEvent && <div className="selected-event"><Ticket size={15} /> Réservation pour : <strong>{events.find((item) => item.id === selectedEvent)?.title}</strong><button type="button" onClick={() => setSelectedEvent('')} aria-label="Enlever l'événement"><X size={14} /></button></div>}
-          <label className="field-label">Nom complet *<input required minLength={2} autoComplete="name" placeholder="Comment vous appelez-vous ?" value={booking.name} onChange={(e) => setBooking({ ...booking, name: e.target.value })} /></label><div className="form-row"><label className="field-label">E-mail *<input required type="email" autoComplete="email" placeholder="vous@exemple.fr" value={booking.email} onChange={(e) => setBooking({ ...booking, email: e.target.value })} /></label><label className="field-label">Téléphone *<input required type="tel" autoComplete="tel" placeholder="06 12 34 56 78" value={booking.phone} onChange={(e) => setBooking({ ...booking, phone: e.target.value })} /></label></div><div className="form-row form-row-three"><label className="field-label">Date *<input required type="date" min={today()} value={booking.date} onChange={(e) => setBooking({ ...booking, date: e.target.value })} /></label><label className="field-label">Heure *<select required value={booking.time} onChange={(e) => setBooking({ ...booking, time: e.target.value })}>{['12:00','12:30','13:00','13:30','19:00','19:30','20:00','20:30','21:00'].map((time) => <option key={time}>{time}</option>)}</select></label><label className="field-label">Convives *<select value={booking.guests} onChange={(e) => setBooking({ ...booking, guests: e.target.value })}>{Array.from({ length: 12 }, (_, i) => i + 1).map((count) => <option key={count} value={count}>{count} {count === 1 ? 'personne' : 'personnes'}</option>)}</select></label></div><label className="field-label">Un mot pour nous ? <textarea rows={2} maxLength={500} placeholder="Allergie, chaise bébé, occasion spéciale…" value={booking.note} onChange={(e) => setBooking({ ...booking, note: e.target.value })} /></label><button className="button button-dark button-submit" type="submit">Confirmer ma demande <ArrowRight size={16} /></button><div className="form-privacy">Aucune empreinte bancaire. Annulation gratuite par téléphone.</div></form>}</div></section>
+          {safeStep === 'date' && (
+            <form className="booking-card" onSubmit={continueToDetails}>
+              <div className="eyebrow"><CalendarDays size={16} /> ÉTAPE 1 SUR 3</div>
+              <h1>Choisissez votre<br /><em>moment à table.</em></h1>
+              <p className="intro">Indiquez la date, l’heure et le nombre de personnes. Nous vous gardons une place.</p>
 
-      <section className="quote-section"><span className="quote-mark">“</span><blockquote>La cuisine, c’est quand les choses ont le goût<br className="desktop-only" /> de ce qu’elles sont.</blockquote><div className="quote-credit"><span /> PAUL BOCUSE, ET UN PEU NOUS AUSSI</div></section>
+              <label className="field-label" htmlFor="booking-date">Date de réservation</label>
+              <input
+                id="booking-date"
+                className="input-control"
+                type="date"
+                min={localToday()}
+                required
+                value={draft.date}
+                onChange={(event) => updateDraft({ date: event.target.value })}
+              />
+
+              <fieldset className="field-group">
+                <legend>Choisissez une heure</legend>
+                <div className="time-grid">
+                  {timeSlots.map((time) => (
+                    <button
+                      type="button"
+                      className={draft.time === time ? 'time-option selected' : 'time-option'}
+                      key={time}
+                      aria-pressed={draft.time === time}
+                      onClick={() => updateDraft({ time })}
+                    >
+                      {time}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+
+              <label className="field-label" htmlFor="booking-guests">Nombre de personnes</label>
+              <select
+                id="booking-guests"
+                className="input-control"
+                value={draft.guests}
+                onChange={(event) => updateDraft({ guests: event.target.value })}
+              >
+                {Array.from({ length: 12 }, (_, index) => index + 1).map((count) => (
+                  <option value={count} key={count}>{count} {count === 1 ? 'personne' : 'personnes'}</option>
+                ))}
+              </select>
+
+              <button className="primary-button" type="submit">Continuer <ArrowRight size={17} /></button>
+            </form>
+          )}
+
+          {safeStep === 'details' && (
+            <form className="booking-card" onSubmit={submitBooking}>
+              <button className="back-button" type="button" onClick={() => navigate('date')}><ArrowLeft size={15} /> Modifier le créneau</button>
+              <div className="eyebrow"><Users size={16} /> ÉTAPE 2 SUR 3</div>
+              <h1>Vos coordonnées<br /><em>pour vous recevoir.</em></h1>
+              <p className="intro">Un moyen de vous joindre au cas où nous aurions une question à propos de votre réservation.</p>
+
+              <label className="field-label" htmlFor="booking-name">Nom et prénom</label>
+              <input id="booking-name" className="input-control" required minLength={2} autoComplete="name" placeholder="Votre nom" value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} />
+
+              <div className="field-row">
+                <div>
+                  <label className="field-label" htmlFor="booking-email">Adresse e-mail</label>
+                  <input id="booking-email" className="input-control" required type="email" autoComplete="email" placeholder="vous@exemple.fr" value={draft.email} onChange={(event) => updateDraft({ email: event.target.value })} />
+                </div>
+                <div>
+                  <label className="field-label" htmlFor="booking-phone">Téléphone</label>
+                  <input id="booking-phone" className="input-control" required type="tel" autoComplete="tel" placeholder="06 12 34 56 78" value={draft.phone} onChange={(event) => updateDraft({ phone: event.target.value })} />
+                </div>
+              </div>
+
+              <label className="field-label" htmlFor="booking-note">Une précision à nous communiquer ? <span>(facultatif)</span></label>
+              <textarea id="booking-note" className="input-control note-control" rows={3} maxLength={500} placeholder="Allergie, chaise bébé, occasion spéciale…" value={draft.note} onChange={(event) => updateDraft({ note: event.target.value })} />
+
+              {error && <p className="form-error" role="alert">{error}</p>}
+              <button className="primary-button" type="submit" disabled={submitting}>
+                {submitting ? 'Enregistrement…' : 'Confirmer ma demande'} {!submitting && <ArrowRight size={17} />}
+              </button>
+              <p className="privacy-note">Votre demande est transmise directement au restaurant.</p>
+            </form>
+          )}
+
+          {safeStep === 'confirmation' && confirmation && (
+            <section className="booking-card confirmation-card">
+              <div className="confirmation-icon"><Check size={30} /></div>
+              <div className="eyebrow">RÉSERVATION ENREGISTRÉE</div>
+              <h1>Merci {confirmation.name.split(' ')[0]},<br /><em>à très vite !</em></h1>
+              <p className="intro">Votre demande a bien été reçue. Le restaurant vous recontactera si nécessaire pour confirmer les détails.</p>
+              <div className="reference-card">
+                <span>VOTRE RÉFÉRENCE</span>
+                <strong>{confirmation.reference}</strong>
+                <p>{formatDate(confirmation.date)}<br />{confirmation.time} · {confirmation.guests} {confirmation.guests === 1 ? 'personne' : 'personnes'}</p>
+              </div>
+              <button className="secondary-button" type="button" onClick={newBooking}>Faire une nouvelle réservation <ArrowRight size={16} /></button>
+            </section>
+          )}
+        </section>
+
+        <aside className="booking-summary" aria-label="Récapitulatif de la réservation">
+          <div className="summary-heading"><Clock3 size={17} /><span>VOTRE RÉSERVATION</span></div>
+          {hasBookingDetails ? (
+            <div className="summary-details">
+              <div><span>Date</span><strong>{formatDate(draft.date)}</strong></div>
+              <div><span>Heure</span><strong>{draft.time}</strong></div>
+              <div><span>Convives</span><strong>{draft.guests} {draft.guests === '1' ? 'personne' : 'personnes'}</strong></div>
+            </div>
+          ) : (
+            <p className="summary-empty">Votre date et votre horaire s’afficheront ici.</p>
+          )}
+          <div className="summary-note">Une question ? Contactez directement le restaurant pour toute demande particulière.</div>
+        </aside>
+      </div>
+
+      <footer className="app-footer">
+        <span>LE ZINC BOUILLON</span>
+        <span>Réservation simple, sans empreinte bancaire.</span>
+      </footer>
     </main>
-    <footer className="site-footer" id="infos"><div className="footer-main"><div><Brand light /><p>La cuisine de toujours,<br />les copains en plus.</p></div><div className="footer-col"><h4>LE ZINC</h4><a href="#maison">La maison</a><a href="#evenements">Les événements</a><a href="#reservation">Réserver</a></div><div className="footer-col"><h4>NOUS TROUVER</h4><span>12 rue des Archives<br />75004 Paris</span><a href="tel:+33142720000">01 42 72 00 00</a><a href="mailto bonjour@lezincbouillon.fr">bonjour@lezincbouillon.fr</a></div><div className="footer-col"><h4>LES HORAIRES</h4><span>Mardi – dimanche</span><span>12h–14h30 · 19h–22h30</span><span className="open-indicator"><i /> Ouvert aujourd’hui</span></div></div><div className="footer-bottom"><span>© 2025 LE ZINC BOUILLON · FAIT AVEC BON SENS À PARIS</span><a href="/admin">Espace établissement <ArrowRight size={13} /></a><span>L’ABUS D’ALCOOL EST DANGEREUX POUR LA SANTÉ.</span></div></footer>
-    {toast && <Toast message={toast} onClose={() => setToast('')} />}
-  </>;
-}
-
-function Admin({ events, refreshEvents, toast, toastMessage }: { events: EventItem[]; refreshEvents: () => Promise<void>; toast: (value: string) => void; toastMessage: string }) {
-  const [token, setToken] = useState(() => sessionStorage.getItem('zinc-admin-token') || '');
-  const [pin, setPin] = useState('');
-  const [reservations, setReservations] = useState<Reservation[]>([]);
-  const [tab, setTab] = useState<'reservations' | 'events'>('reservations');
-  const [filter, setFilter] = useState('today');
-  const [query, setQuery] = useState('');
-  const [loginError, setLoginError] = useState('');
-  const [eventForm, setEventForm] = useState<Partial<EventItem> | null>(null);
-  const [noticeEnabled, setNoticeEnabled] = useState(Notification.permission === 'granted');
-  const [soundEnabled] = useState(true);
-  const [newCount, setNewCount] = useState(0);
-  const [mobileMenu, setMobileMenu] = useState(false);
-
-  const loadReservations = useCallback(async () => {
-    if (!token) return;
-    try { setReservations(await api<Reservation[]>('/api/admin/reservations', {}, token)); } catch (error) { if (error instanceof Error && error.message.includes('Session')) { sessionStorage.removeItem('zinc-admin-token'); setToken(''); } }
-  }, [token]);
-  useEffect(() => { void loadReservations(); void refreshEvents(); }, [loadReservations, refreshEvents]);
-  useEffect(() => {
-    if (!token) return;
-    const socket = io();
-    socket.on('reservation:new', (reservation: Reservation) => {
-      setReservations((previous) => previous.some((item) => item.id === reservation.id) ? previous : [...previous, reservation].sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`)));
-      setNewCount((count) => count + 1);
-      toast(`Nouvelle réservation de ${reservation.name} · ${reservation.guests} pers.`);
-      if (noticeEnabled && Notification.permission === 'granted') new Notification('Nouvelle réservation · Le Zinc', { body: `${reservation.name} · ${reservation.guests} couverts · ${prettyDate(reservation.date)} à ${reservation.time}` });
-      if (soundEnabled) { try { const audio = new AudioContext(); const oscillator = audio.createOscillator(); const gain = audio.createGain(); oscillator.connect(gain); gain.connect(audio.destination); oscillator.frequency.value = 740; gain.gain.setValueAtTime(0.12, audio.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.5); oscillator.start(); oscillator.stop(audio.currentTime + 0.5); oscillator.onended = () => void audio.close(); } catch { /* Son bloqué par le navigateur. */ } }
-    });
-    socket.on('reservation:updated', (updated: Reservation) => setReservations((previous) => previous.map((item) => item.id === updated.id ? updated : item)));
-    socket.on('events:updated', () => void refreshEvents());
-    return () => { socket.disconnect(); };
-  }, [token, noticeEnabled, soundEnabled, toast, refreshEvents]);
-  const login = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setLoginError(''); try { const result = await api<{ token: string }>('/api/admin/login', { method: 'POST', body: JSON.stringify({ pin }) }); sessionStorage.setItem('zinc-admin-token', result.token); setToken(result.token); } catch (error) { setLoginError(error instanceof Error ? error.message : 'Connexion impossible.'); } };
-  const updateStatus = async (reservation: Reservation, status: string) => { try { const updated = await api<Reservation>(`/api/admin/reservations/${reservation.id}`, { method: 'PATCH', body: JSON.stringify({ status }) }, token); setReservations((previous) => previous.map((item) => item.id === updated.id ? updated : item)); } catch (error) { toast(error instanceof Error ? error.message : 'Mise à jour impossible.'); } };
-  const saveEvent = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!eventForm) return; const editing = Boolean(eventForm.id); try { await api(`/api/admin/events${editing ? `/${eventForm.id}` : ''}`, { method: editing ? 'PUT' : 'POST', body: JSON.stringify(eventForm) }, token); setEventForm(null); await refreshEvents(); toast(editing ? 'Événement modifié.' : 'Événement ajouté au programme.'); } catch (error) { toast(error instanceof Error ? error.message : 'Enregistrement impossible.'); } };
-  const deleteEvent = async (item: EventItem) => { if (!window.confirm(`Supprimer « ${item.title} » ?`)) return; try { await api(`/api/admin/events/${item.id}`, { method: 'DELETE' }, token); await refreshEvents(); toast('Événement supprimé.'); } catch (error) { toast(error instanceof Error ? error.message : 'Suppression impossible.'); } };
-  const toggleNotifications = async () => { if (Notification.permission === 'granted') { setNoticeEnabled((value) => !value); return; } if (!('Notification' in window)) { toast('Les notifications navigateur ne sont pas disponibles sur cet appareil.'); return; } const permission = await Notification.requestPermission(); setNoticeEnabled(permission === 'granted'); if (permission !== 'granted') toast('Autorisez les notifications dans les réglages du navigateur.'); };
-  const filtered = useMemo(() => reservations.filter((item) => {
-    const dateMatch = filter === 'all' || (filter === 'today' ? item.date === today() : filter === 'upcoming' ? item.date >= today() : item.status === filter);
-    const queryMatch = `${item.name} ${item.email} ${item.reference}`.toLowerCase().includes(query.toLowerCase());
-    return dateMatch && queryMatch;
-  }), [reservations, filter, query]);
-  const todayItems = reservations.filter((item) => item.date === today() && item.status !== 'Annulée');
-  const pending = reservations.filter((item) => item.status === 'À confirmer').length;
-  const guestsToday = todayItems.reduce((sum, item) => sum + item.guests, 0);
-  if (!token) return <div className="login-screen"><div className="login-card"><Brand /><div className="eyebrow"><span className="eyebrow-line" />ESPACE ÉTABLISSEMENT</div><h1>Bonjour,<br /><em>la maison.</em></h1><p>Connectez-vous pour retrouver le carnet de réservations et les événements à venir.</p><form onSubmit={login}><label className="field-label">Code établissement<input required inputMode="numeric" type="password" maxLength={12} placeholder="••••" value={pin} onChange={(e) => setPin(e.target.value)} autoFocus /></label>{loginError && <p className="login-error">{loginError}</p>}<button className="button button-dark button-submit">Accéder au tableau de bord <ArrowRight size={16} /></button></form><a href="/" className="back-home"><ArrowLeft size={14} /> Retour au site</a><small className="login-hint">Code de démonstration : 1234 · À modifier via ADMIN_PIN avant mise en ligne.</small></div></div>;
-
-  return <div className="admin-layout"><aside className={`admin-sidebar ${mobileMenu ? 'sidebar-open' : ''}`}><div className="sidebar-brand"><Brand light /><button className="sidebar-close" onClick={() => setMobileMenu(false)} aria-label="Fermer"><X size={19} /></button></div><div className="sidebar-caption">VOTRE MAISON</div><nav className="side-nav"><button className={tab === 'reservations' ? 'active' : ''} onClick={() => { setTab('reservations'); setMobileMenu(false); }}><CalendarDays size={18} /> Réservations {pending > 0 && <span className="side-count">{pending}</span>}</button><button className={tab === 'events' ? 'active' : ''} onClick={() => { setTab('events'); setMobileMenu(false); }}><Sparkles size={18} /> Événements</button><a href="/" className="side-home"><ArrowLeft size={17} /> Voir le site</a></nav><div className="sidebar-bottom"><div className="open-card"><span className="open-indicator"><i /> Service du jour</span><p>Midi <strong>12:00 – 14:30</strong><br />Soir <strong>19:00 – 22:30</strong></p><button onClick={() => toast('Les horaires se modifient dans les paramètres du restaurant.')}>Modifier les horaires <ArrowRight size={13} /></button></div><button className="logout-button" onClick={() => { sessionStorage.removeItem('zinc-admin-token'); setToken(''); }}><Settings2 size={16} /> Se déconnecter</button></div></aside>
-    {mobileMenu && <button className="mobile-backdrop" onClick={() => setMobileMenu(false)} aria-label="Fermer le menu" />}
-    <main className="admin-main"><header className="admin-header"><button className="mobile-menu-button" onClick={() => setMobileMenu(true)} aria-label="Ouvrir le menu"><Menu size={21} /></button><div><div className="eyebrow"><span className="eyebrow-line" />LE ZINC BOUILLON · PARIS 04</div><h1>{tab === 'reservations' ? 'Le carnet de la maison.' : 'Les rendez-vous du Zinc.'}</h1></div><div className="admin-head-actions"><button className={`notification-toggle ${noticeEnabled ? 'notification-on' : ''}`} onClick={() => void toggleNotifications()} title="Notifications navigateur"><Bell size={16} /><span>{noticeEnabled ? 'Notifications activées' : 'Activer les notifications'}</span></button><button className="admin-avatar" aria-label="Profil établissement">Z</button></div></header>
-      {tab === 'reservations' ? <><div className="welcome-row"><p>Un petit coup d’œil, et la salle est à vous.</p><span className="live-badge"><i /> EN DIRECT</span></div><div className="stats-grid"><article className="stat-card stat-primary"><span>LES COUVERTS DU JOUR</span><div><strong>{guestsToday}</strong><span>personnes attendues</span></div><Users size={19} /></article><article className="stat-card"><span>RÉSERVATIONS DU JOUR</span><div><strong>{todayItems.length.toString().padStart(2, '0')}</strong><span>tables au carnet</span></div><CalendarDays size={18} /></article><article className="stat-card"><span>À CONFIRMER</span><div><strong>{pending.toString().padStart(2, '0')}</strong><span>en attente</span></div><Clock3 size={18} /></article><article className="stat-card"><span>NOUVELLES ARRIVÉES</span><div><strong>{newCount.toString().padStart(2, '0')}</strong><span>depuis l’ouverture</span></div><Bell size={18} /></article></div><section className="reservations-panel"><div className="panel-heading"><div><span className="panel-kicker">LE CARNET</span><h2>Les réservations <span>({filtered.length})</span></h2></div><button className="button button-outline" onClick={() => void loadReservations()}><span className="refresh-icon">↻</span> Actualiser</button></div><div className="table-toolbar"><div className="filter-tabs"><button className={filter === 'today' ? 'selected' : ''} onClick={() => setFilter('today')}>Aujourd’hui</button><button className={filter === 'upcoming' ? 'selected' : ''} onClick={() => setFilter('upcoming')}>À venir</button><button className={filter === 'all' ? 'selected' : ''} onClick={() => setFilter('all')}>Tout voir</button></div><label className="search-field"><Search size={15} /><input placeholder="Nom, e-mail, référence…" value={query} onChange={(e) => setQuery(e.target.value)} /></label></div>{filtered.length ? <div className="reservation-list">{filtered.map((item) => <article className="reservation-row" key={item.id}><div className="guest-avatar">{item.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</div><div className="reservation-person"><strong>{item.name}</strong><span>{item.reference} · {item.email}</span>{item.note && <small>Note : {item.note}</small>}</div><div className="reservation-time"><strong>{prettyDate(item.date, { weekday: 'short', day: 'numeric', month: 'short' })}</strong><span>{item.time}</span></div><div className="reservation-guests"><Users size={15} /><strong>{item.guests}</strong><span>couv.</span></div><div className={`status-pill status-${item.status.toLowerCase().replaceAll(' ', '-')}`}>{item.status}</div><select className="status-select" aria-label={`Modifier le statut de ${item.name}`} value={item.status} onChange={(e) => void updateStatus(item, e.target.value)}><option>À confirmer</option><option>Confirmée</option><option>Annulée</option><option>Terminée</option></select><ChevronDown className="status-chevron" size={13} /></article>)}</div> : <div className="empty-state"><CalendarDays size={25} /><strong>Aucune réservation dans cette sélection</strong><span>Les nouvelles demandes apparaîtront ici, en direct.</span></div>}</section><div className="admin-footer-note"><span><i /> Votre carnet est synchronisé en temps réel</span><span>Dernière mise à jour : à l’instant</span></div></> : <section className="events-admin"><div className="panel-heading"><div><span className="panel-kicker">PROGRAMMATION</span><h2>Les prochains rendez-vous</h2></div><button className="button button-dark" onClick={() => setEventForm({ title: '', description: '', date: '', time: '20:00', category: 'Musique', capacity: 40 })}><Plus size={16} /> Ajouter un événement</button></div><div className="event-admin-list">{events.map((item) => <article className="event-admin-row" key={item.id}><div className="event-admin-date"><strong>{new Date(`${item.date}T12:00:00`).getDate()}</strong><span>{new Intl.DateTimeFormat('fr-FR', { month: 'short' }).format(new Date(`${item.date}T12:00:00`)).replace('.', '').toUpperCase()}</span></div><div className="event-admin-copy"><span>{item.category} · {item.time}</span><h3>{item.title}</h3><p>{item.description}</p></div><div className="capacity"><span>JAUGE</span><strong>{item.booked}<small> / {item.capacity}</small></strong><div className="capacity-bar"><i style={{ width: `${Math.min(100, item.booked / item.capacity * 100)}%` }} /></div></div><button className="icon-button" onClick={() => setEventForm(item)} aria-label={`Modifier ${item.title}`}><Settings2 size={17} /></button><button className="icon-button danger-icon" onClick={() => void deleteEvent(item)} aria-label={`Supprimer ${item.title}`}><Trash2 size={17} /></button></article>)}{!events.length && <div className="empty-state"><Sparkles size={25} /><strong>La scène est à vous.</strong><span>Ajoutez votre premier événement au programme.</span></div>}</div><div className="event-admin-tip"><Sparkles size={18} /><span><strong>Un petit conseil :</strong> les événements s’affichent automatiquement sur la page de réservation.</span></div></section>}
-    </main>
-    {eventForm && <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setEventForm(null); }}><form className="event-modal" onSubmit={saveEvent}><div className="modal-top"><div><span className="panel-kicker">PROGRAMMATION DU ZINC</span><h2>{eventForm.id ? 'Modifier l’événement' : 'Un nouveau rendez-vous'}</h2></div><button type="button" className="icon-button" onClick={() => setEventForm(null)} aria-label="Fermer"><X size={19} /></button></div><label className="field-label">Nom de l’événement *<input required value={eventForm.title || ''} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })} placeholder="Ex. Soirée jazz au Zinc" /></label><label className="field-label">Quelques mots *<textarea required rows={3} value={eventForm.description || ''} onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })} placeholder="Donnez envie de nous rejoindre…" /></label><div className="form-row"><label className="field-label">Date *<input required type="date" min={today()} value={eventForm.date || ''} onChange={(e) => setEventForm({ ...eventForm, date: e.target.value })} /></label><label className="field-label">Heure *<input required type="time" value={eventForm.time || '20:00'} onChange={(e) => setEventForm({ ...eventForm, time: e.target.value })} /></label></div><div className="form-row"><label className="field-label">Type<select value={eventForm.category || 'Soirée'} onChange={(e) => setEventForm({ ...eventForm, category: e.target.value })}><option>Musique</option><option>Brunch</option><option>Soirée</option><option>Dégustation</option><option>Autre</option></select></label><label className="field-label">Nombre de places *<input required type="number" min={eventForm.booked || 1} max="300" value={eventForm.capacity || 40} onChange={(e) => setEventForm({ ...eventForm, capacity: Number(e.target.value) })} /></label></div><div className="modal-actions"><button type="button" className="button button-outline" onClick={() => setEventForm(null)}>Annuler</button><button className="button button-dark" type="submit"><Check size={15} /> Enregistrer</button></div></form></div>}
-    {toastMessage && <Toast message={toastMessage} onClose={() => toast('')} />}
-  </div>;
+  );
 }
