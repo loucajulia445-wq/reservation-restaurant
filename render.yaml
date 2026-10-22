@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: le-zinc-bouillon
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: zinc-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 24
+      - key: DB_PATH
+        value: /var/data/db.json
+      - key: ADMIN_PIN
+        sync: false
