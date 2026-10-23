@@ -14,9 +14,16 @@ const port = Number(process.env.PORT || 4000);
 const reservationConfirmationDelayMs = 3 * 60 * 1000;
 const confirmationEmailRetryDelayMs = 60 * 1000;
 const maxConfirmationEmailAttempts = 3;
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  ...(process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
+];
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer, { cors: { origin: '*' } });
+const io = new Server(httpServer, {
+  cors: { origin: allowedOrigins, methods: ['GET', 'POST'] },
+});
 const adminSessions = new Set();
 const creatorSessions = new Set();
 const reservationConfirmationTimers = new Map();
@@ -330,6 +337,19 @@ function requireSession(sessions, message) {
 const requireAdmin = requireSession(adminSessions, 'Session expirée. Reconnectez-vous.');
 const requireCreator = requireSession(creatorSessions, 'Session créateur expirée. Reconnectez-vous.');
 
+app.use('/api', (req, res, next) => {
+  const origin = req.get('Origin');
+  if (!origin) return next();
+  if (!allowedOrigins.includes(origin)) {
+    return res.status(403).json({ error: 'Cette origine n’est pas autorisée à accéder à l’API.' });
+  }
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+});
 app.use(express.json({ limit: '32kb' }));
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.get('/api/events', (_req, res) => {

@@ -25,3 +25,5 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false

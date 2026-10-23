@@ -2,6 +2,20 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { io } from 'socket.io-client';
 import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, LogOut, Mail, Radio, RefreshCw, Shield, Terminal, Trash2, Users, X } from 'lucide-react';
 
+const apiBaseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+const apiUrl = (path: string) => `${apiBaseUrl}${path}`;
+
+async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(apiUrl(path), options);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error('Impossible de joindre le serveur de réservation. Vérifiez l’adresse VITE_API_URL dans Vercel et l’origine autorisée dans CORS_ALLOWED_ORIGINS sur Render.');
+    }
+    throw error;
+  }
+}
+
 type Step = 'date' | 'details' | 'confirmation';
 type BookingDraft = {
   date: string;
@@ -55,7 +69,7 @@ function isCreatorReservation(value: unknown): value is CreatorReservation {
 }
 
 async function creatorRequest<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
+  const response = await apiFetch(path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -172,7 +186,7 @@ function formatDate(value: string) {
 }
 
 async function createReservation(draft: BookingDraft): Promise<Reservation> {
-  const response = await fetch('/api/reservations', {
+  const response = await apiFetch('/api/reservations', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -483,7 +497,7 @@ function CreatorPortal() {
 
   useEffect(() => {
     if (!token) return;
-    const socket = io();
+    const socket = io(apiBaseUrl || undefined);
     socket.on('reservation:new', (reservation: unknown) => {
       if (isCreatorReservation(reservation)) {
         setReservations((current) => [reservation, ...current.filter((item) => item.id !== reservation.id)]);
@@ -507,7 +521,7 @@ function CreatorPortal() {
     setLoginError('');
     setBusy(true);
     try {
-      const response = await fetch('/api/creators/login', {
+      const response = await apiFetch('/api/creators/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin }),

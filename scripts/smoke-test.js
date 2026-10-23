@@ -60,6 +60,7 @@ const child = spawn(process.execPath, ['server/server.js'], {
     CREATOR_PIN: '1304',
     RESEND_API_KEY: '',
     RESEND_FROM_EMAIL: '',
+    CORS_ALLOWED_ORIGINS: 'https://reservation-test.vercel.app',
     DISABLE_EMAILS: 'true',
     DB_PATH: join(directory, 'db.json'),
   },
@@ -95,6 +96,23 @@ try {
 
   const events = await request('/api/events');
   assert.ok(events.length > 0, 'Les événements de démonstration sont chargés.');
+  const allowedOriginResponse = await fetch(`${base}/api/health`, {
+    headers: { Origin: 'https://reservation-test.vercel.app' },
+  });
+  assert.equal(allowedOriginResponse.headers.get('access-control-allow-origin'), 'https://reservation-test.vercel.app', 'L’origine Vercel configurée peut appeler l’API.');
+  const preflightResponse = await fetch(`${base}/api/creators/login`, {
+    method: 'OPTIONS',
+    headers: {
+      Origin: 'https://reservation-test.vercel.app',
+      'Access-Control-Request-Method': 'POST',
+      'Access-Control-Request-Headers': 'content-type',
+    },
+  });
+  assert.equal(preflightResponse.status, 204, 'Les requêtes CORS préliminaires sont acceptées.');
+  const blockedOriginResponse = await fetch(`${base}/api/health`, {
+    headers: { Origin: 'https://autre-site.example' },
+  });
+  assert.equal(blockedOriginResponse.status, 403, 'Une origine non autorisée ne peut pas appeler l’API.');
   const lockedCreatorList = await fetch(`${base}/api/creators/reservations`);
   assert.equal(lockedCreatorList.status, 401, 'Les réservations créateur sont protégées par une session.');
   const lockedCreatorDelete = await fetch(`${base}/api/creators/reservations/not-authorized`, { method: 'DELETE' });
