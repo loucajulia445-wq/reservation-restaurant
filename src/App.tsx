@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { io } from 'socket.io-client';
-import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, LockKeyhole, LogOut, Mail, Radio, RefreshCw, Shield, Terminal, Users, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CalendarDays, Check, Clock3, LogOut, Mail, Radio, RefreshCw, Shield, Terminal, Trash2, Users, X } from 'lucide-react';
 
 type Step = 'date' | 'details' | 'confirmation';
 type BookingDraft = {
@@ -63,7 +63,11 @@ async function creatorRequest<T>(path: string, token: string, options: RequestIn
       ...options.headers,
     },
   });
-  const data: unknown = response.status === 204 ? null : await response.json();
+  if (response.status === 404 && options.method === 'DELETE' && path.startsWith('/api/creators/reservations/')) {
+    await response.text();
+    throw new Error('La suppression n’est pas encore disponible sur le serveur en ligne. Redéployez la dernière version du serveur Express, puis réessayez.');
+  }
+  const data: unknown = response.status === 204 ? null : await readApiResponse(response);
   if (!response.ok) {
     const message = data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
       ? data.error
@@ -71,6 +75,24 @@ async function creatorRequest<T>(path: string, token: string, options: RequestIn
     throw new Error(message);
   }
   return data as T;
+}
+
+async function readApiResponse(response: Response): Promise<unknown> {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('application/json')) {
+    await response.text();
+    if (response.status === 404) {
+      throw new Error('Cette fonction n’est pas encore disponible sur le serveur en ligne. Redéployez la dernière version du serveur Express.');
+    }
+    throw new Error(
+      `Le serveur en ligne a renvoyé une page web au lieu de l’API (HTTP ${response.status}). Vérifiez que le service Express est déployé et relié à cette adresse.`,
+    );
+  }
+  try {
+    return await response.json();
+  } catch {
+    throw new Error('Le serveur a renvoyé une réponse API illisible. Vérifiez son déploiement et ses journaux.');
+  }
 }
 
 const paths: Record<Step, string> = {
@@ -159,7 +181,7 @@ async function createReservation(draft: BookingDraft): Promise<Reservation> {
       eventId: null,
     }),
   });
-  const result: unknown = await response.json();
+  const result = await readApiResponse(response);
   if (!response.ok) {
     const message = result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
       ? result.error
@@ -187,10 +209,6 @@ export default function App() {
   const [confirmation, setConfirmation] = useState<Reservation | null>(readReservation);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [showCreatorLogin, setShowCreatorLogin] = useState(false);
-  const [creatorPin, setCreatorPin] = useState('');
-  const [creatorLoginError, setCreatorLoginError] = useState('');
-  const [creatorLoginPending, setCreatorLoginPending] = useState(false);
 
   useEffect(() => {
     if (!window.location.hash) window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${paths.date}`);
@@ -249,35 +267,6 @@ export default function App() {
     navigate('date');
   };
 
-  const loginCreator = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setCreatorLoginError('');
-    setCreatorLoginPending(true);
-    try {
-      const response = await fetch('/api/creators/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin: creatorPin }),
-      });
-      const result: unknown = await response.json();
-      if (!response.ok || !result || typeof result !== 'object' || !('token' in result) || typeof result.token !== 'string') {
-        const message = result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
-          ? result.error
-          : 'Connexion impossible.';
-        throw new Error(message);
-      }
-      sessionStorage.setItem('zinc-creators-token', result.token);
-      setShowCreatorLogin(false);
-      setCreatorPin('');
-      window.location.hash = '#/createurs';
-      setCreatorsRoute(true);
-    } catch (loginError) {
-      setCreatorLoginError(loginError instanceof Error ? loginError.message : 'Connexion impossible.');
-    } finally {
-      setCreatorLoginPending(false);
-    }
-  };
-
   if (creatorsRoute) return <CreatorPortal />;
 
   const hasBookingDetails = Boolean(draft.date && draft.time && draft.guests);
@@ -291,7 +280,7 @@ export default function App() {
           <a className="brand" href="#/reservation" aria-label="Le Zinc Bouillon — réservation">
             <img className="brand-logo" src="/logo-zinc.svg" alt="Le Zinc Bouillon" />
           </a>
-          <button className="secret-logo-trigger" type="button" aria-label="Accès créateurs" title="Accès créateurs" onClick={() => { setCreatorLoginError(''); setShowCreatorLogin(true); }} />
+          <button className="secret-logo-trigger" type="button" aria-label="Accès créateurs" title="Accès créateurs" onClick={() => { sessionStorage.removeItem('zinc-creators-token'); window.location.hash = '#/createurs/connexion'; }} />
         </div>
         <span className="header-caption">RÉSERVATION EN LIGNE</span>
       </header>
@@ -352,9 +341,17 @@ export default function App() {
                 {Array.from({ length: 12 }, (_, index) => index + 1).map((count) => (
                   <option value={count} key={count}>{count} {count === 1 ? 'personne' : 'personnes'}</option>
                 ))}
+                <option value="more">Plus de 12 personnes</option>
               </select>
 
-              <button className="primary-button" type="submit">Continuer <ArrowRight size={17} /></button>
+              {draft.guests === 'more' ? (
+                <div className="large-party-contact" role="status">
+                  <p>Pour une réservation de plus de 12 personnes, contactez directement le restaurant.</p>
+                  <a className="primary-button" href="tel:+33494229000">Appeler le 04 94 22 90 00</a>
+                </div>
+              ) : (
+                <button className="primary-button" type="submit">Continuer <ArrowRight size={17} /></button>
+              )}
             </form>
           )}
 
@@ -428,20 +425,6 @@ export default function App() {
         <span>LE ZINC BOUILLON</span>
         <span>Réservation simple, sans empreinte bancaire.</span>
       </footer>
-      {showCreatorLogin && (
-        <div className="creator-login-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowCreatorLogin(false); }}>
-          <form className="creator-login-modal" onSubmit={loginCreator}>
-            <button className="creator-login-close" type="button" aria-label="Fermer" onClick={() => setShowCreatorLogin(false)}><X size={17} /></button>
-            <div className="creator-login-icon"><LockKeyhole size={21} /></div>
-            <span className="creator-kicker">ZONE PRIVÉE</span>
-            <h2>Accès créateurs</h2>
-            <label htmlFor="creator-pin">Code PIN à 4 chiffres</label>
-            <input id="creator-pin" autoFocus inputMode="numeric" type="password" pattern="[0-9]{4}" maxLength={4} required value={creatorPin} onChange={(event) => setCreatorPin(event.target.value.replace(/\D/g, '').slice(0, 4))} />
-            {creatorLoginError && <p className="creator-login-error" role="alert">{creatorLoginError}</p>}
-            <button className="creator-login-submit" type="submit" disabled={creatorLoginPending}>{creatorLoginPending ? 'Vérification…' : 'Entrer'} <ArrowRight size={16} /></button>
-          </form>
-        </div>
-      )}
     </main>
   );
 }
@@ -457,12 +440,15 @@ function CreatorPortal() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState('');
 
   const signOut = () => {
     sessionStorage.removeItem('zinc-creators-token');
     setToken('');
     setReservations([]);
     setEmail('');
+    window.location.hash = '#/createurs/connexion';
   };
 
   useEffect(() => {
@@ -508,6 +494,11 @@ function CreatorPortal() {
         setReservations((current) => current.map((item) => item.id === reservation.id ? reservation : item));
       }
     });
+    socket.on('reservation:deleted', (reservation: unknown) => {
+      if (reservation && typeof reservation === 'object' && 'id' in reservation && typeof reservation.id === 'string') {
+        setReservations((current) => current.filter((item) => item.id !== reservation.id));
+      }
+    });
     return () => { socket.disconnect(); };
   }, [token]);
 
@@ -521,7 +512,7 @@ function CreatorPortal() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin }),
       });
-      const result: unknown = await response.json();
+      const result = await readApiResponse(response);
       if (!response.ok || !result || typeof result !== 'object' || !('token' in result) || typeof result.token !== 'string') {
         const errorMessage = result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
           ? result.error
@@ -531,6 +522,7 @@ function CreatorPortal() {
       sessionStorage.setItem('zinc-creators-token', result.token);
       setToken(result.token);
       setPin('');
+      window.location.hash = '#/createurs/reservations';
     } catch (loginFailure) {
       setLoginError(loginFailure instanceof Error ? loginFailure.message : 'Connexion impossible.');
     } finally {
@@ -569,6 +561,22 @@ function CreatorPortal() {
       setError(refreshFailure instanceof Error ? refreshFailure.message : 'Actualisation impossible.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const deleteReservation = async (reservation: CreatorReservation) => {
+    setError('');
+    setMessage('');
+    setDeletingId(reservation.id);
+    try {
+      await creatorRequest<void>(`/api/creators/reservations/${encodeURIComponent(reservation.id)}`, token, { method: 'DELETE' });
+      setReservations((current) => current.filter((item) => item.id !== reservation.id));
+      setMessage(`Réservation ${reservation.reference} supprimée.`);
+      setConfirmDeleteId('');
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Suppression impossible.');
+    } finally {
+      setDeletingId('');
     }
   };
 
@@ -618,6 +626,17 @@ function CreatorPortal() {
                 <article className="creator-reservation" key={reservation.id}>
                   <div className="reservation-scan"><span>{reservation.reference}</span><strong>{reservation.guests.toString().padStart(2, '0')}</strong><small>CONVIVES</small></div>
                   <div className="creator-reservation-info"><div className="creator-reservation-top"><h4>{reservation.name}</h4><span className={`creator-status ${reservation.status === 'Annulée' ? 'cancelled' : ''}`}>{reservation.status.toUpperCase()}</span></div><p className="creator-reservation-date">{formatDate(reservation.date)} · {reservation.time}</p><p className="creator-contact"><a href={`mailto:${encodeURIComponent(reservation.email)}`}>{reservation.email}</a><span>·</span><a href={`tel:${reservation.phone.replace(/[^\d+]/g, '')}`}>{reservation.phone}</a></p>{reservation.note && <p className="creator-reservation-note">NOTE // {reservation.note}</p>}</div>
+                  <div className="creator-delete-actions">
+                    {confirmDeleteId === reservation.id ? (
+                      <>
+                        <span>SUPPRIMER ?</span>
+                        <button className="creator-delete-confirm" type="button" disabled={deletingId === reservation.id} onClick={() => void deleteReservation(reservation)}>{deletingId === reservation.id ? 'SUPPRESSION…' : 'OUI, SUPPRIMER'}</button>
+                        <button className="creator-delete-cancel" type="button" disabled={deletingId === reservation.id} onClick={() => setConfirmDeleteId('')}><X size={13} /> ANNULER</button>
+                      </>
+                    ) : (
+                      <button className="creator-delete-button" type="button" aria-label={`Supprimer la réservation ${reservation.reference}`} title="Supprimer cette réservation" onClick={() => setConfirmDeleteId(reservation.id)}><Trash2 size={15} /> <span>SUPPRIMER</span></button>
+                    )}
+                  </div>
                 </article>
               ))}
             </div>

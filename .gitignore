@@ -4,3 +4,7 @@ server/db.json
 .env
 .env.local
 npm-debug.log*
+# Identifiants confidentiels Google
+
+client_secret*.json
+token.json

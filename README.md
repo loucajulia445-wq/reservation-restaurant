@@ -17,6 +17,8 @@ Les réservations sont envoyées à l’API Express et enregistrées dans `serve
 
 Cliquez sur le petit point caché en bas à droite du logo pour ouvrir l’accès créateurs. Le PIN local par défaut est `1304` ; vous pouvez le remplacer avec `CREATOR_PIN`. Il ouvre un espace privé avec les réservations mises à jour en direct et le réglage de l’adresse de notification. Les PIN de démonstration ne sont pas une protection suffisante pour un déploiement public : utilisez un code privé, activez HTTPS et prévoyez une protection contre les tentatives répétées.
 
+Le client reçoit d’abord un e-mail accusant réception de sa demande. Si la réservation est toujours en attente, le serveur la confirme automatiquement après trois minutes et envoie un second e-mail de confirmation. Si elle est confirmée manuellement avant ce délai, l’e-mail de confirmation est envoyé immédiatement. Les confirmations en attente sont reprises après un redémarrage du serveur.
+
 ### Configuration locale de Resend
 
 1. Dans Resend, créez une API key et vérifiez le domaine ou l’adresse qui servira d’expéditeur.

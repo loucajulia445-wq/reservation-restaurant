@@ -16,9 +16,12 @@
     "@vitejs/plugin-react": "^4.7.0",
     "concurrently": "^9.2.1",
     "express": "^5.1.0",
+    "googleapis": "^187.0.0",
     "lucide-react": "^0.468.0",
+    "open": "^11.0.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "resend": "^6.34.1",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
     "vite": "^6.3.5"

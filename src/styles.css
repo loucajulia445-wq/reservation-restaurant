@@ -136,6 +136,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
 .field-row .field-label { margin-top: 17px; }
 .note-control { min-height: 80px; padding-top: 12px; resize: vertical; }
+.large-party-contact {
+  margin-top: 20px;
+  padding: 15px 17px;
+  border-left: 3px solid var(--terra);
+  background: #f6eee6;
+}
+.large-party-contact p { margin: 0; color: #51463f; font-size: 11px; line-height: 1.65; }
+.large-party-contact .primary-button { width: fit-content; min-height: 42px; margin-top: 13px; padding: 0 18px; }
 .back-button {
   margin: -4px 0 23px;
   padding: 0;
@@ -329,7 +337,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   letter-spacing: 1.1px;
 }
 .creator-auth-card label span { color: #72857a; }
-.creator-auth-card input, .creator-email-controls input, .creator-login-modal input {
+.creator-auth-card input, .creator-email-controls input {
   width: 100%;
   height: 45px;
   padding: 0 13px;
@@ -340,7 +348,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   font: 500 15px 'DM Sans', sans-serif;
   letter-spacing: 5px;
 }
-.creator-auth-card input:focus, .creator-email-controls input:focus, .creator-login-modal input:focus {
+.creator-auth-card input:focus, .creator-email-controls input:focus {
   border-color: var(--creator-neon);
   outline: 1px solid #7dffa688;
 }
@@ -372,7 +380,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   letter-spacing: .8px;
 }
 .creator-back:hover, .creator-header-actions a:hover, .creator-header-actions button:hover { color: var(--creator-neon); }
-.creator-error, .creator-login-error { margin: 12px 0 0; color: #ff8585; font-size: 10px; line-height: 1.55; }
+.creator-error { margin: 12px 0 0; color: #ff8585; font-size: 10px; line-height: 1.55; }
 
 .creator-header {
   position: relative;
@@ -457,7 +465,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   padding: 15px 1px;
   border-bottom: 1px solid #283730;
   display: grid;
-  grid-template-columns: 68px minmax(0, 1fr);
+  grid-template-columns: 68px minmax(0, 1fr) 122px;
+  align-items: center;
   gap: 15px;
 }
 .reservation-scan {
@@ -483,49 +492,47 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .creator-contact a { color: #98b0a1; text-decoration: underline; text-decoration-color: #43574b; text-underline-offset: 2px; }
 .creator-contact a:hover { color: var(--creator-neon); }
 .creator-reservation-note { margin: 8px 0 0; color: #d1c18d; font-size: 9px; line-height: 1.5; }
+.creator-delete-button {
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid #694044;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #25191b;
+  color: #ff9292;
+  font: 700 7px 'DM Sans', sans-serif;
+  letter-spacing: .45px;
+}
+.creator-delete-button:hover { border-color: #ff8585; background: #3b2023; color: #fff; }
+.creator-delete-button:disabled { opacity: .45; cursor: wait; }
+.creator-delete-actions { display: flex; flex-direction: column; gap: 5px; }
+.creator-delete-actions>span { color: #ffaaaa; font-size: 7px; font-weight: 700; text-align: center; }
+.creator-delete-confirm, .creator-delete-cancel {
+  min-height: 27px;
+  padding: 0 5px;
+  border: 1px solid #bd4f55;
+  background: #692a30;
+  color: #fff;
+  font: 700 7px 'DM Sans', sans-serif;
+  letter-spacing: .2px;
+}
+.creator-delete-confirm:hover { background: #8b343b; }
+.creator-delete-cancel {
+  border-color: #40534a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: #18231f;
+  color: #bac9c0;
+}
+.creator-delete-actions button:disabled { opacity: .55; cursor: wait; }
 .creator-panel-error { margin: 11px 0; }
 .creator-footer { margin-top: 20px; display: flex; justify-content: space-between; color: #697a70; font-size: 7px; letter-spacing: .8px; }
 .creator-footer span:last-child { display: flex; align-items: center; gap: 7px; color: var(--creator-neon); }
 .creator-footer i { width: 5px; height: 5px; border-radius: 50%; background: var(--creator-neon); box-shadow: 0 0 7px var(--creator-neon); }
-
-.creator-login-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  padding: 20px;
-  display: grid;
-  place-items: center;
-  background: rgba(5, 9, 8, .83);
-  backdrop-filter: blur(5px);
-}
-.creator-login-modal {
-  position: relative;
-  width: min(360px, 100%);
-  padding: 30px;
-  border: 1px solid #385548;
-  background: #101918;
-  color: #e1e9e3;
-  box-shadow: 0 0 40px #7dffa619;
-}
-.creator-login-close { position: absolute; top: 12px; right: 12px; padding: 4px; border: 0; background: none; color: #87978d; }
-.creator-login-icon { width: 38px; height: 38px; margin-bottom: 16px; border: 1px solid #42644e; display: grid; place-items: center; color: var(--creator-neon); }
-.creator-login-modal h2 { margin: 6px 0 21px; font-size: 22px; }
-.creator-login-modal label { display: block; margin-bottom: 8px; color: #a9b9b0; font-size: 10px; }
-.creator-login-modal input { height: 42px; }
-.creator-login-submit {
-  width: 100%;
-  min-height: 42px;
-  margin-top: 16px;
-  border: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background: var(--creator-neon);
-  color: #07100b;
-  font: 700 10px 'DM Sans', sans-serif;
-}
-.creator-login-submit:disabled { opacity: .6; cursor: wait; }
 
 @media (max-width: 600px) {
   .creator-portal { padding: 0 16px; }
@@ -543,7 +550,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .system-status, .reservation-count { font-size: 6px; }
   .creator-email-controls { flex-direction: column; }
   .creator-email-controls button { width: 100%; }
-  .creator-reservation { grid-template-columns: 54px minmax(0, 1fr); gap: 10px; }
+  .creator-reservation { grid-template-columns: 54px minmax(0, 1fr) 92px; gap: 8px; }
+  .creator-delete-button { padding: 0 5px; font-size: 6px; }
+  .creator-delete-button svg { width: 12px; height: 12px; }
   .creator-reservation-top { align-items: flex-start; flex-direction: column; gap: 5px; }
   .creator-reservation-top h4 { font-size: 12px; }
   .creator-contact { font-size: 8px; }
