@@ -19,10 +19,23 @@ const allowedOrigins = [
   'http://127.0.0.1:5173',
   ...(process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean),
 ];
+function isAllowedOrigin(origin) {
+  if (allowedOrigins.includes(origin)) return true;
+  try {
+    const parsedOrigin = new URL(origin);
+    return parsedOrigin.protocol === 'http:'
+      && ['localhost', '127.0.0.1'].includes(parsedOrigin.hostname);
+  } catch {
+    return false;
+  }
+}
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: allowedOrigins, methods: ['GET', 'POST'] },
+  cors: {
+    origin: (origin, callback) => callback(null, !origin || isAllowedOrigin(origin)),
+    methods: ['GET', 'POST'],
+  },
 });
 const adminSessions = new Set();
 const creatorSessions = new Set();
@@ -340,7 +353,7 @@ const requireCreator = requireSession(creatorSessions, 'Session créateur expir�
 app.use('/api', (req, res, next) => {
   const origin = req.get('Origin');
   if (!origin) return next();
-  if (!allowedOrigins.includes(origin)) {
+  if (!isAllowedOrigin(origin)) {
     return res.status(403).json({ error: 'Cette origine n’est pas autorisée à accéder à l’API.' });
   }
   res.setHeader('Access-Control-Allow-Origin', origin);

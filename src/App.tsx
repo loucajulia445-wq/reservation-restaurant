@@ -10,7 +10,10 @@ async function apiFetch(path: string, options?: RequestInit): Promise<Response> 
     return await fetch(apiUrl(path), options);
   } catch (error) {
     if (error instanceof TypeError) {
-      throw new Error('Impossible de joindre le serveur de réservation. Vérifiez l’adresse VITE_API_URL dans Vercel et l’origine autorisée dans CORS_ALLOWED_ORIGINS sur Render.');
+      const help = import.meta.env.DEV
+        ? 'Vérifiez que le serveur API est lancé avec npm run dev.'
+        : 'Vérifiez VITE_API_URL dans Vercel et CORS_ALLOWED_ORIGINS sur Render.';
+      throw new Error(`Impossible de joindre le serveur de réservation. ${help}`);
     }
     throw error;
   }

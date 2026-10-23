@@ -100,6 +100,10 @@ try {
     headers: { Origin: 'https://reservation-test.vercel.app' },
   });
   assert.equal(allowedOriginResponse.headers.get('access-control-allow-origin'), 'https://reservation-test.vercel.app', 'L’origine Vercel configurée peut appeler l’API.');
+  const localAlternateOriginResponse = await fetch(`${base}/api/health`, {
+    headers: { Origin: 'http://localhost:5174' },
+  });
+  assert.equal(localAlternateOriginResponse.headers.get('access-control-allow-origin'), 'http://localhost:5174', 'Les ports locaux Vite alternatifs sont autorisés.');
   const preflightResponse = await fetch(`${base}/api/creators/login`, {
     method: 'OPTIONS',
     headers: {

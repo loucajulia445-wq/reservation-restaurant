@@ -9,7 +9,7 @@ L’identité visuelle s’inspire du [site du Zinc Bouillon Toulon](https://lez
 1. Installez Node.js 20 ou plus récent.
 2. Dans ce dossier, lancez `npm install`.
 3. Lancez `npm run dev`.
-4. Ouvrez l’adresse Vite affichée dans le terminal (habituellement `http://localhost:5173`).
+4. Ouvrez l’adresse Vite affichée dans le terminal (habituellement `http://localhost:5173`). Gardez les deux processus lancés par cette commande : Vite sert le site et Express traite les réservations et l’espace créateurs. N’utilisez pas `npm run dev:web` seul ; il ne démarre pas l’API.
 
 Les réservations sont envoyées à l’API Express et enregistrées dans `server/db.json` (ou dans le chemin défini par `DB_PATH`). Pour compiler l’application, lancez `npm run build`. En production, `npm start` démarre le serveur Node qui sert le site et l’API.
 
